@@ -56,7 +56,7 @@ func (r *Skydns2Adapter) Register(service *bridge.Service) error {
 func (r *Skydns2Adapter) Deregister(service *bridge.Service) error {
 	_, err := r.client.Delete(r.servicePath(service), false)
 	if err != nil {
-		log.Println("skydns2: failed to register service:", err)
+		log.Println("skydns2: failed to deregister service:", err)
 	}
 	return err
 }
