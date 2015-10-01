@@ -25,7 +25,7 @@ type Bridge struct {
 
 func New(docker *dockerapi.Client, adapterUri string, config Config) (*Bridge, error) {
 	uri, err := url.Parse(adapterUri)
-	if err != nil {
+	if err != nil || uri.Scheme == "" {
 		return nil, errors.New("bad adapter uri: " + adapterUri)
 	}
 	factory, found := AdapterFactories.Lookup(uri.Scheme)
