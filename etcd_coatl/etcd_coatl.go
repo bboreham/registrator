@@ -1,11 +1,13 @@
 package etcd_coatl
 
 import (
+	"encoding/json"
 	"log"
 	"net/url"
 	"strconv"
 	"strings"
 
+	"github.com/bboreham/coatl/backend"
 	"github.com/bboreham/coatl/data"
 	"github.com/coreos/go-etcd/etcd"
 	"github.com/gliderlabs/registrator/bridge"
@@ -23,11 +25,30 @@ func (f *Factory) New(uri *url.URL) bridge.RegistryAdapter {
 		urls = append(urls, "http://"+uri.Host)
 	}
 
-	return &CoatlAdapter{client: etcd.NewClient(urls)}
+	a := &CoatlAdapter{client: etcd.NewClient(urls), services: make(map[string]*service)}
+	a.readInServices()
+	return a
 }
 
 type CoatlAdapter struct {
-	client *etcd.Client
+	client   *etcd.Client
+	services map[string]*service
+}
+
+type service struct {
+	name    string
+	details data.Service
+}
+
+func (r *CoatlAdapter) readInServices() {
+	services := make(map[string]*service)
+	backend.ForeachServiceInstance(func(name, value string) {
+		s := &service{name: name}
+		if err := json.Unmarshal([]byte(value), &s.details); err != nil {
+			log.Fatal("Error unmarshalling: ", err)
+		}
+		services[name] = s
+	}, nil)
 }
 
 func (r *CoatlAdapter) Ping() error {
@@ -45,7 +66,6 @@ func (r *CoatlAdapter) Register(service *bridge.Service) error {
 	}
 	port := strconv.Itoa(service.Port)
 	record := `{"address":"` + service.IP + `","port":` + port + `}`
-	log.Println("setting ", r.instancePath(service))
 	_, err := r.client.Set(r.instancePath(service), record, uint64(service.TTL))
 	if err != nil {
 		log.Println("coatl: failed to register service:", err)
@@ -72,6 +92,13 @@ func (r *CoatlAdapter) servicePath(service *bridge.Service) string {
 	// Remove port number that Registrator helpfully adds, sometimes
 	suffix := "-" + service.Origin.ExposedPort
 	name := strings.TrimSuffix(service.Name, suffix)
+	// If this is a service that has been registered against a specific image name, override
+	for serviceName, service := range r.services {
+		if name == service.details.Image {
+			name = serviceName
+			break
+		}
+	}
 	return data.ServicePath + name + "/"
 }
 
