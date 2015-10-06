@@ -41,13 +41,13 @@ type service struct {
 }
 
 func (r *CoatlAdapter) readInServices() {
-	services := make(map[string]*service)
+	backend.SetClient(r.client) // hack!
 	backend.ForeachServiceInstance(func(name, value string) {
 		s := &service{name: name}
 		if err := json.Unmarshal([]byte(value), &s.details); err != nil {
 			log.Fatal("Error unmarshalling: ", err)
 		}
-		services[name] = s
+		r.services[name] = s
 	}, nil)
 }
 
@@ -62,6 +62,7 @@ func (r *CoatlAdapter) Ping() error {
 
 func (r *CoatlAdapter) Register(service *bridge.Service) error {
 	if !r.isRegisteredService(service) {
+		log.Println("service not registered:", r.servicePath(service), service)
 		return nil
 	}
 	port := strconv.Itoa(service.Port)
