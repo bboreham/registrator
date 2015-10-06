@@ -2,14 +2,13 @@ package etcd_coatl
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/url"
-	"strconv"
 	"strings"
 
-	"github.com/bboreham/coatl/backend"
+	"github.com/bboreham/coatl/backends"
 	"github.com/bboreham/coatl/data"
-	"github.com/coreos/go-etcd/etcd"
 	"github.com/gliderlabs/registrator/bridge"
 )
 
@@ -25,13 +24,13 @@ func (f *Factory) New(uri *url.URL) bridge.RegistryAdapter {
 		urls = append(urls, "http://"+uri.Host)
 	}
 
-	a := &CoatlAdapter{client: etcd.NewClient(urls), services: make(map[string]*service)}
+	a := &CoatlAdapter{backend: backends.NewBackend(urls), services: make(map[string]*service)}
 	a.readInServices()
 	return a
 }
 
 type CoatlAdapter struct {
-	client   *etcd.Client
+	backend  *backends.Backend
 	services map[string]*service
 }
 
@@ -41,8 +40,7 @@ type service struct {
 }
 
 func (r *CoatlAdapter) readInServices() {
-	backend.SetClient(r.client) // hack!
-	backend.ForeachServiceInstance(func(name, value string) {
+	r.backend.ForeachServiceInstance(func(name, value string) {
 		s := &service{name: name}
 		if err := json.Unmarshal([]byte(value), &s.details); err != nil {
 			log.Fatal("Error unmarshalling: ", err)
@@ -52,22 +50,14 @@ func (r *CoatlAdapter) readInServices() {
 }
 
 func (r *CoatlAdapter) Ping() error {
-	rr := etcd.NewRawRequest("GET", "version", nil, nil)
-	_, err := r.client.SendRequest(rr)
-	if err != nil {
-		return err
-	}
-	return nil
+	return r.backend.Ping()
 }
 
 func (r *CoatlAdapter) Register(service *bridge.Service) error {
-	if !r.isRegisteredService(service) {
-		log.Println("service not registered:", r.servicePath(service), service)
-		return nil
+	if err := r.backend.CheckRegisteredService(r.serviceName(service)); err != nil {
+		return fmt.Errorf("coatl: service not registered: %s", r.serviceName(service))
 	}
-	port := strconv.Itoa(service.Port)
-	record := `{"address":"` + service.IP + `","port":` + port + `}`
-	_, err := r.client.Set(r.instancePath(service), record, uint64(service.TTL))
+	err := r.backend.AddInstance(r.serviceName(service), r.instanceName(service), service.IP, service.Port)
 	if err != nil {
 		log.Println("coatl: failed to register service:", err)
 	}
@@ -75,10 +65,10 @@ func (r *CoatlAdapter) Register(service *bridge.Service) error {
 }
 
 func (r *CoatlAdapter) Deregister(service *bridge.Service) error {
-	if !r.isRegisteredService(service) {
+	if r.backend.CheckRegisteredService(r.serviceName(service)) != nil {
 		return nil
 	}
-	_, err := r.client.Delete(r.instancePath(service), false)
+	err := r.backend.RemoveInstance(r.serviceName(service), r.instanceName(service))
 	if err != nil {
 		log.Println("coatl: failed to deregister service:", err)
 	}
@@ -89,7 +79,7 @@ func (r *CoatlAdapter) Refresh(service *bridge.Service) error {
 	return r.Register(service)
 }
 
-func (r *CoatlAdapter) servicePath(service *bridge.Service) string {
+func (r *CoatlAdapter) serviceName(service *bridge.Service) string {
 	// Remove port number that Registrator helpfully adds, sometimes
 	suffix := "-" + service.Origin.ExposedPort
 	name := strings.TrimSuffix(service.Name, suffix)
@@ -100,14 +90,9 @@ func (r *CoatlAdapter) servicePath(service *bridge.Service) string {
 			break
 		}
 	}
-	return data.ServicePath + name + "/"
+	return name
 }
 
-func (r *CoatlAdapter) instancePath(service *bridge.Service) string {
-	return r.servicePath(service) + service.ID
-}
-
-func (r *CoatlAdapter) isRegisteredService(service *bridge.Service) bool {
-	_, err := r.client.Get(r.servicePath(service)+"_details", false, false)
-	return err == nil
+func (r *CoatlAdapter) instanceName(service *bridge.Service) string {
+	return service.ID
 }
